@@ -93,6 +93,7 @@ pub struct NeliPartitionState {
     is_assigned: bool,
     is_live: bool,
     last_received: Option<Instant>,
+    last_heartbeat: Option<Instant>,
 }
 
 pub enum NeliStatus {
@@ -311,6 +312,7 @@ where
                 is_assigned: false,
                 is_live: false,
                 last_received: None,
+                last_heartbeat: None,
             });
         }
         drop(partitions_state_value);
@@ -435,23 +437,48 @@ where
                                 }
                             }
                         }
-                        match self.producer.send(
-                            BaseRecord::with_opaque_to(self.config.leader_topic.as_str(), 0)
-                                .partition(index as i32)
-                                .key("")
-                                .payload(""),
-                        ) {
-                            Ok(_) => {
-                                debug!(
-                                    "[{}] Heartbeat sent on partition {}",
-                                    self.config.name, index
-                                );
+
+                        let should_send_heartbeat = match partition_state.last_heartbeat {
+                            None => true,
+                            Some(last_heartbeat) => {
+                                if let Some(elapsed_duration) =
+                                    now.checked_duration_since(last_heartbeat)
+                                {
+                                    if elapsed_duration
+                                        > Duration::from_millis(
+                                            (self.config.heartbeat_timeout.as_millis() as f64
+                                                / 3f64)
+                                                as u64,
+                                        )
+                                    {
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
                             }
-                            Err((err, _)) => {
-                                debug!(
-                                    "[{}] Failed to send heartbeat on partition {}: {:?}",
-                                    self.config.name, index, err
-                                );
+                        };
+                        if should_send_heartbeat {
+                            match self.producer.send(
+                                BaseRecord::with_opaque_to(self.config.leader_topic.as_str(), 0)
+                                    .partition(index as i32)
+                                    .key("")
+                                    .payload(""),
+                            ) {
+                                Ok(_) => {
+                                    debug!(
+                                        "[{}] Heartbeat sent on partition {}",
+                                        self.config.name, index
+                                    );
+                                }
+                                Err((err, _)) => {
+                                    warn!(
+                                        "[{}] Failed to send heartbeat on partition {}: {:?}",
+                                        self.config.name, index, err
+                                    );
+                                }
                             }
                         }
                     }
