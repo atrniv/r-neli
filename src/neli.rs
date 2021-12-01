@@ -133,22 +133,19 @@ where
         }
         (state.barrier)(events);
     }
-    fn on_revoke(&self) {
+    fn on_revoke(&self, tpl: &TopicPartitionList) {
         let mut state = self.partitions_state.lock().unwrap();
-        let events: Vec<LeaderEvent> = state
-            .partitions
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(index, partition)| {
-                if partition.is_assigned {
-                    partition.is_assigned = false;
-                    partition.is_live = false;
-                    Some(LeaderEvent::LeaderRevoked(index as i32))
-                } else {
-                    None
-                }
-            })
+        let events: Vec<LeaderEvent> = tpl
+            .elements()
+            .iter()
+            .map(|x| LeaderEvent::LeaderRevoked(x.partition()))
             .collect();
+        for item in tpl.elements() {
+            let partition = &mut state.partitions[item.partition() as usize];
+            partition.is_assigned = false;
+            partition.is_live = false;
+            partition.last_received = None;
+        }
         (state.barrier)(events);
     }
 }
@@ -161,14 +158,14 @@ where
     fn post_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
         match rebalance {
             Rebalance::Assign(tpl) => self.on_assign(tpl),
-            Rebalance::Revoke => {}
+            Rebalance::Revoke(_) => {}
             Rebalance::Error(_) => {}
         }
     }
     fn pre_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
         match rebalance {
             Rebalance::Assign(_) => {}
-            Rebalance::Revoke => self.on_revoke(),
+            Rebalance::Revoke(tpl) => self.on_revoke(tpl),
             Rebalance::Error(_) => {}
         }
     }
@@ -480,6 +477,11 @@ where
                                     );
                                 }
                             }
+                        } else {
+                            debug!(
+                                "[{}] Heartbeat skipped on partition {}",
+                                self.config.name, index
+                            );
                         }
                     }
                 }
